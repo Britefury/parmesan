@@ -260,7 +260,7 @@ if collect_out_hash_hex != 'db6d6c323b8e4f3b47f24426a791d7eb4903afe2680f8a40bdbf
 
 
 # Get list of all trainable parameters in the network.
-all_params = lasagne.layers.get_all_params(layers[0].z_hat_bn, trainable=True)
+all_params = lasagne.layers.get_all_params(layers[0].l_z_hat_bn, trainable=True)
 print ""*20 + "PARAMETERS" + "-"*20
 for p in all_params:
     print p.name, p.get_value().shape
