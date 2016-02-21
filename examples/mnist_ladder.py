@@ -40,7 +40,7 @@ from parmesan.layers import (ListIndexLayer, NormalizeLayer,
                              DenoiseLayer,)
 from parmesan.utils import theano_graph_hash_hex
 from parmesan.layers.ladderlayers import decode_denoise, decode_normalize, RasmusInit, DenseLadderLayer, InputLadderLayer
-import os, sys
+import os, sys, time
 import uuid
 import parmesan
 import hashlib, binascii, cStringIO
@@ -336,9 +336,11 @@ with open(output_file, 'a') as f:
 
 
 for epoch in range(num_epochs):
+    t1 = time.time()
     confusion_train, losses_train, layer_costs = train_epoch_semisupervised(x_train)
     confusion_valid = test_epoch(x_valid, targets_valid)
     confusion_test = test_epoch(x_test, targets_test)
+    t2 = time.time()
 
     if any(np.isnan(losses_train)) or any(np.isinf(losses_train)):
         with open(output_file, 'w') as f:
@@ -365,9 +367,9 @@ for epoch in range(num_epochs):
         sh_lr.set_value(lasagne.utils.floatX(new_lr))
 
     str_costs = "\t{}"*len(layer_costs)
-    s = ("*EPOCH\t{}\t{}\t{}\t{}\t{}\t{}"+str_costs).format(
-        epoch, np.mean(losses_train), train_acc_cur, valid_acc_cur,
-        test_acc_cur, sh_lr.get_value(), *layer_costs)
+    s = ("*EPOCH {}: time {:.2f}, tr-loss {:.6f}, tr-err {:.2f}%, va-err {:.2f}%, te-err {:.2f}%, lr {}"+str_costs).format(
+        epoch, t2-t1, np.mean(losses_train), (1-train_acc_cur)*100.0, (1-valid_acc_cur)*100.0,
+        (1-test_acc_cur)*100.0, sh_lr.get_value())
     print s
     with open(output_file, 'a') as f:
         f.write(s + "\n")
