@@ -366,8 +366,7 @@ for epoch in range(num_epochs):
         new_lr = old_lr - (lr/(num_epochs-start_decay))
         sh_lr.set_value(lasagne.utils.floatX(new_lr))
 
-    str_costs = "\t{}"*len(layer_costs)
-    s = ("*EPOCH {}: time {:.2f}, tr-loss {:.6f}, tr-err {:.2f}%, va-err {:.2f}%, te-err {:.2f}%, lr {}"+str_costs).format(
+    s = ("*EPOCH {}: time {:.2f}, tr-loss {:.6f}, tr-err {:.2f}%, va-err {:.2f}%, te-err {:.2f}%, lr {}").format(
         epoch, t2-t1, np.mean(losses_train), (1-train_acc_cur)*100.0, (1-valid_acc_cur)*100.0,
         (1-test_acc_cur)*100.0, sh_lr.get_value())
     print s
