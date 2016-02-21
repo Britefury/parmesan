@@ -38,9 +38,10 @@ import theano.tensor as T
 from parmesan.layers import (ListIndexLayer, NormalizeLayer,
                              ScaleAndShiftLayer, DecoderNormalizeLayer,
                              DenoiseLayer,)
-import os
+import os, sys
 import uuid
 import parmesan
+import hashlib, binascii, cStringIO
 
 
 class RasmusInit(lasagne.init.Initializer):
@@ -303,6 +304,12 @@ costs += [lambdas[0]*T.sqr(z0_clean.flatten(2) - z_hat_bn0_noisy.flatten(2)).mea
 
 
 cost = sum(costs)
+hasher = hashlib.sha256()
+buf = cStringIO.StringIO()
+theano.printing.debugprint(cost, file=buf)
+hasher.update(buf.getvalue())
+print('Graph hash: {0}'.format(binascii.hexlify(hasher.digest())))
+sys.exit()
 # prediction passes
 collect_out = lasagne.layers.get_output(
     l_out_enc, sym_x, deterministic=True, collect=True)
