@@ -39,33 +39,12 @@ from parmesan.layers import (ListIndexLayer, NormalizeLayer,
                              ScaleAndShiftLayer, DecoderNormalizeLayer,
                              DenoiseLayer,)
 from parmesan.utils import theano_graph_hash_hex
+from parmesan.layers.ladderlayers import decode_denoise, decode_normalize, RasmusInit, DenseLadderLayer, InputLadderLayer
 import os, sys
 import uuid
 import parmesan
 import hashlib, binascii, cStringIO
 
-
-class RasmusInit(lasagne.init.Initializer):
-    """Sample initial weights from the Gaussian distribution.
-    Initial weight parameters are sampled from N(mean, std).
-    Parameters
-
-    https://github.com/arasmus/ladder
-    ----------
-    std : float
-        Std of initial parameters.
-    mean : float
-        Mean of initial parameters.
-    """
-    def __init__(self, std=1.0, mean=0.0):
-        self.std = std
-        self.mean = mean
-
-    # std one should reproduce rasmus init...
-    def sample(self, shape):
-        return lasagne.utils.floatX(lasagne.random.get_rng().normal(
-            self.mean, self.std, size=shape) /
-                      np.sqrt(shape[0]))
 
 
 filename_script = os.path.basename(os.path.realpath(__file__))
@@ -166,108 +145,58 @@ sym_x = T.matrix('sym_x')
 sym_t = T.ivector('sym_t')
 sh_lr = theano.shared(lasagne.utils.floatX(lr))
 
-z_pre0 = InputLayer(shape=(None, x_train.shape[1]))
-z0 = z_pre0   # for consistency with other layers
-z_noise0 = GaussianNoiseLayer(z0, sigma=noise, name='enc_noise0')
-h0 = z_noise0  # no nonlinearity on input
-
-
 def get_unlab(l):
     return SliceLayer(l, indices=slice(num_labels, None), axis=0)
 
 
-def create_encoder(incoming, num_units, nonlinearity, layer_num):
-    i = layer_num
-    z_pre = DenseLayer(
-        incoming=incoming, num_units=num_units, nonlinearity=identity, b=None,
-        name='enc_dense%i' % i, W=init)
-    norm_list = NormalizeLayer(
-        z_pre, return_stats=True, name='enc_normalize%i' % i,
-        stat_indices=unlabeled_slice)
-    z = ListIndexLayer(norm_list, index=0, name='enc_index%i' % i)
-    z_noise = GaussianNoiseLayer(z, sigma=noise, name='enc_noise%i' % i)
-    h = NonlinearityLayer(
-        ScaleAndShiftLayer(z_noise, name='enc_scale%i' % i),
-        nonlinearity=nonlinearity, name='enc_nonlin%i' % i)
-    return h, z, z_noise, norm_list
+
+ll0 = InputLadderLayer(shape=(None, 28*28), cost_weight=lambdas[0])
+ll1 = DenseLadderLayer(num_units_in=28*28, num_units_out=1000, nonlinearity=unit, init=init, cost_weight=lambdas[1])
+ll2 = DenseLadderLayer(num_units_in=1000, num_units_out=500, nonlinearity=unit, init=init, cost_weight=lambdas[2])
+ll3 = DenseLadderLayer(num_units_in=500, num_units_out=250, nonlinearity=unit, init=init, cost_weight=lambdas[3])
+ll4 = DenseLadderLayer(num_units_in=250, num_units_out=250, nonlinearity=unit, init=init, cost_weight=lambdas[4])
+ll5 = DenseLadderLayer(num_units_in=250, num_units_out=250, nonlinearity=unit, init=init, cost_weight=lambdas[5])
+ll6 = DenseLadderLayer(num_units_in=250, num_units_out=10, nonlinearity=softmax, init=init, cost_weight=lambdas[6])
 
 
-def create_decoder(z_hat_in, z_noise, num_units, norm_list, layer_num):
-    i = layer_num
-    dense = DenseLayer(z_hat_in, num_units=num_units, name='dec_dense%i' % i,
-                       W=init, nonlinearity=identity)
-    normalize = NormalizeLayer(dense, name='dec_normalize%i' % i)
-    u = ScaleAndShiftLayer(normalize, name='dec_scale%i' % i)
-    z_hat = DenoiseLayer(u_net=u, z_net=get_unlab(z_noise), name='dec_denoise%i' % i)
-    mean = ListIndexLayer(norm_list, index=1, name='dec_index_mean%i' % i)
-    var = ListIndexLayer(norm_list, index=2, name='dec_index_var%i' % i)
-    z_hat_bn = DecoderNormalizeLayer(z_hat, mean=mean, var=var,
-                                     name='dec_decnormalize%i' % i)
-    return z_hat, z_hat_bn
+layers = [ll0, ll1, ll2, ll3, ll4, ll5, ll6]
+
+h_prev = None
+for i, layer in enumerate(layers):
+    layer.l_h, layer.l_z, layer.l_z_noise, layer.l_norm_list = layer.create_encoder(h_prev, unlabeled_slice, i)
+    h_prev = layer.l_h
 
 
-h1, z1, z_noise1, norm_list1 = create_encoder(
-    h0, num_units=1000, nonlinearity=unit, layer_num=1)
+l_out_enc = layers[-1].l_h
 
-h2, z2, z_noise2, norm_list2 = create_encoder(
-    h1, num_units=500, nonlinearity=unit, layer_num=2)
-
-h3, z3, z_noise3, norm_list3 = create_encoder(
-    h2, num_units=250, nonlinearity=unit, layer_num=3)
-
-h4, z4, z_noise4, norm_list4 = create_encoder(
-    h3, num_units=250, nonlinearity=unit, layer_num=4)
-
-h5, z5, z_noise5, norm_list5 = create_encoder(
-    h4, num_units=250, nonlinearity=unit, layer_num=5)
-
-h6, z6, z_noise6, norm_list6 = create_encoder(
-    h5, num_units=10, nonlinearity=softmax, layer_num=6)
-
-l_out_enc = h6
-
-print "h6:", lasagne.layers.get_output(h6, sym_x).eval({sym_x: x_train[:200]}).shape
-h6_dec = get_unlab(l_out_enc)
-print "y_weights_decoder:", lasagne.layers.get_output(h6_dec, sym_x).eval({sym_x: x_train[:200]}).shape
+# print "h6:", lasagne.layers.get_output(h6, sym_x).eval({sym_x: x_train[:200]}).shape
+l_out_dec = get_unlab(l_out_enc)
+# print "y_weights_decoder:", lasagne.layers.get_output(l_out_dec, sym_x).eval({sym_x: x_train[:200]}).shape
 
 
 ###############
 #  DECODER    #
 ###############
 
-##### Decoder Layer 6
-u6 = ScaleAndShiftLayer(NormalizeLayer(
-    h6_dec, name='dec_normalize6'), name='dec_scale6')
-z_hat6 = DenoiseLayer(u_net=u6, z_net=get_unlab(z_noise6), name='dec_denoise6')
-mean6 = ListIndexLayer(norm_list6, index=1, name='dec_index_mean6')
-var6 = ListIndexLayer(norm_list6, index=2, name='dec_index_var6')
-z_hat_bn6 = DecoderNormalizeLayer(
-    z_hat6, mean=mean6, var=var6, name='dec_decnormalize6')
-###########################
+layers[-1].l_z_hat_pre = l_out_dec
 
-z_hat5, z_hat_bn5 = create_decoder(z_hat6, z_noise5, 250, norm_list5, 5)
-z_hat4, z_hat_bn4 = create_decoder(z_hat5, z_noise4, 250, norm_list4, 4)
-z_hat3, z_hat_bn3 = create_decoder(z_hat4, z_noise3, 250, norm_list3, 3)
-z_hat2, z_hat_bn2 = create_decoder(z_hat3, z_noise2, 500, norm_list2, 2)
-z_hat1, z_hat_bn1 = create_decoder(z_hat2, z_noise1, 1000, norm_list1, 1)
+for i, layer in reversed(list(enumerate(layers))):
+    z_hat, z_hat_bn, z_hat_pre_prev = \
+        layer.create_decoder_2(layer.l_z_hat_pre, layer.l_z_noise, layer.l_norm_list, num_labels, i)
+    if i > 0:
+        layer.l_z_hat, layer.l_z_hat_bn, layers[i-1].l_z_hat_pre = z_hat, z_hat_bn, z_hat_pre_prev
+    else:
+        layer.l_z_hat, layer.l_z_hat_bn = z_hat, z_hat_bn
 
 
-############################# Decoder Layer 0
-# i need this because i also has h0 aka. input layer....
-u0 = ScaleAndShiftLayer(  # refactor this...
-    NormalizeLayer(
-        DenseLayer(z_hat1, num_units=num_inputs, name='dec_dense0', W=init, nonlinearity=identity),
-        name='dec_normalize0'), name='dec_scale0')
-z_hat0 = DenoiseLayer(u_net=u0, z_net=get_unlab(z_noise0), name='dec_denoise0')
-z_hat_bn0 = z_hat0   # for consistency
-#############################
+# print "z_hat_bn0:", lasagne.layers.get_output(
+#     z_hat_bn0, sym_x).eval({sym_x: x_train[:200]}).shape
 
-print "z_hat_bn0:", lasagne.layers.get_output(
-    z_hat_bn0, sym_x).eval({sym_x: x_train[:200]}).shape
+
 
 [enc_out_clean, z0_clean, z1_clean, z2_clean,
  z3_clean, z4_clean, z5_clean, z6_clean] = lasagne.layers.get_output(
-    [l_out_enc, z0, z1, z2, z3, z4, z5, z6], sym_x, deterministic=True)
+    [l_out_enc] + [l.l_z for l in layers], sym_x, deterministic=True)
 
 # Clean pass of encoder  note that these are both labeled
 # and unlabeled so we need to slice
@@ -279,13 +208,13 @@ z4_clean = z4_clean[num_labels:]
 z5_clean = z5_clean[num_labels:]
 z6_clean = z6_clean[num_labels:]
 
+
 # noisy pass encoder + decoder
 # the output from the decoder is only unlabeled because we slice the top h
 [out_enc_noisy, z_hat_bn0_noisy, z_hat_bn1_noisy,
  z_hat_bn2_noisy, z_hat_bn3_noisy, z_hat_bn4_noisy,
  z_hat_bn5_noisy, z_hat_bn6_noisy] = lasagne.layers.get_output(
-    [l_out_enc, z_hat_bn0, z_hat_bn1, z_hat_bn2,
-     z_hat_bn3, z_hat_bn4, z_hat_bn5, z_hat_bn6],
+    [l_out_enc] + [l.l_z_hat_bn for l in layers],
      sym_x,  deterministic=False)
 
 
@@ -331,7 +260,7 @@ if collect_out_hash_hex != 'db6d6c323b8e4f3b47f24426a791d7eb4903afe2680f8a40bdbf
 
 
 # Get list of all trainable parameters in the network.
-all_params = lasagne.layers.get_all_params(z_hat_bn0, trainable=True)
+all_params = lasagne.layers.get_all_params(layers[0].z_hat_bn, trainable=True)
 print ""*20 + "PARAMETERS" + "-"*20
 for p in all_params:
     print p.name, p.get_value().shape
