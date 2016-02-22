@@ -116,11 +116,11 @@ class RasmusInit(lasagne.init.Initializer):
 
 
 class AbstractLadderLayer (object):
-    def create_encoder(self, incoming, unlabeled_slice, layer_num):
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num):
         raise NotImplementedError('abstract for class {0}'.format(type(self)))
 
 
-    def create_decoder_2(self, z_hat_pre, z_noise, norm_list, num_labels, layer_num):
+    def create_decoder(self, z_hat_pre, num_labels, layer_num):
         raise NotImplementedError('abstract for class {0}'.format(type(self)))
 
 
@@ -140,9 +140,9 @@ class XformLadderLayer (AbstractLadderLayer):
     def _decode_xform(self, z_hat_in, i):
         raise NotImplementedError('abstract for class {0}'.format(type(self)))
 
-    def create_encoder(self, incoming, unlabeled_slice, layer_num):
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num):
         i = layer_num
-        z_pre = self._encode_xform(incoming, i)
+        z_pre = self._encode_xform(h_prev, i)
         norm_list = NormalizeLayer(
             z_pre, return_stats=True, name='enc_normalize%i' % i,
             stat_indices=unlabeled_slice)
@@ -151,15 +151,21 @@ class XformLadderLayer (AbstractLadderLayer):
         h = NonlinearityLayer(
             ScaleAndShiftLayer(z_noise, name='enc_scale%i' % i),
             nonlinearity=self.nonlinearity, name='enc_nonlin%i' % i)
-        return h, z, z_noise, norm_list
+        self.l_h = h
+        self.l_z = z
+        self.l_z_noise = z_noise
+        self.l_norm_list = norm_list
+        return h
 
 
-    def create_decoder_2(self, z_hat_pre, z_noise, norm_list, num_labels, layer_num):
+    def create_decoder(self, z_hat_pre, num_labels, layer_num):
         i = layer_num
-        z_hat = decode_denoise(z_hat_pre, z_noise, i, num_labels)
-        z_hat_bn = decode_normalize(z_hat, norm_list, i)
+        z_hat = decode_denoise(z_hat_pre, self.l_z_noise, i, num_labels)
+        z_hat_bn = decode_normalize(z_hat, self.l_norm_list, i)
         z_hat_pre_below = self._decode_xform(z_hat, i - 1)
-        return z_hat, z_hat_bn, z_hat_pre_below
+        self.l_z_hat = z_hat
+        self.l_z_hat_bn = z_hat_bn
+        return z_hat_pre_below
 
 
 class DenseLadderLayer (XformLadderLayer):
@@ -188,26 +194,30 @@ class InputLadderLayer (AbstractLadderLayer):
         self.noise = noise
         self.cost_weight = cost_weight
 
-    def create_encoder(self, incoming, unlabeled_slice, layer_num):
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num):
         z = lasagne.layers.InputLayer(shape=self.shape)
         z_noise = GaussianNoiseLayer(z, sigma=self.noise, name='enc_noise%i' % layer_num)
         h = z_noise
-        return h, z, z_noise, None
+        self.l_h = h
+        self.l_z = z
+        self.l_z_noise = z_noise
+        return h
 
 
-    def create_decoder_2(self, z_hat_pre, z_noise, norm_list, num_labels, layer_num):
+    def create_decoder(self, z_hat_pre, num_labels, layer_num):
         i = layer_num
-        z_hat = decode_denoise(z_hat_pre, z_noise, i, num_labels=num_labels)
+        z_hat = decode_denoise(z_hat_pre, self.l_z_noise, i, num_labels=num_labels)
         z_hat_bn = z_hat   # for consistency
-        return z_hat, z_hat_bn, None
+        self.l_z_hat = z_hat
+        self.l_z_hat_bn = z_hat_bn
+        return None
 
 
 
 def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
     h_prev = None
     for i, layer in enumerate(layers):
-        layer.l_h, layer.l_z, layer.l_z_noise, layer.l_norm_list = layer.create_encoder(h_prev, unlabeled_slice, i)
-        h_prev = layer.l_h
+        h_prev = layer.create_encoder(h_prev, unlabeled_slice, i)
 
 
     l_out_enc = layers[-1].l_h
@@ -221,15 +231,10 @@ def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
     #  DECODER    #
     ###############
 
-    layers[-1].l_z_hat_pre = l_out_dec
+    z_hat_pre = l_out_dec
 
     for i, layer in reversed(list(enumerate(layers))):
-        z_hat, z_hat_bn, z_hat_pre_prev = \
-            layer.create_decoder_2(layer.l_z_hat_pre, layer.l_z_noise, layer.l_norm_list, num_labels, i)
-        if i > 0:
-            layer.l_z_hat, layer.l_z_hat_bn, layers[i-1].l_z_hat_pre = z_hat, z_hat_bn, z_hat_pre_prev
-        else:
-            layer.l_z_hat, layer.l_z_hat_bn = z_hat, z_hat_bn
+        z_hat_pre = layer.create_decoder(z_hat_pre, num_labels, i)
 
 
     # print "z_hat_bn0:", lasagne.layers.get_output(
@@ -238,7 +243,7 @@ def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
     # Clean pass of encoder
     clean_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z for l in layers],
                                            sym_x, deterministic=True)
-    enc_out_clean = clean_outs[0]
+    out_enc_clean = clean_outs[0]
     for layer, z_clean in zip(layers, clean_outs[1:]):
         # Select unsupervised samples
         layer.z_clean = z_clean[num_labels:]
@@ -264,4 +269,4 @@ def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
     collect_out = lasagne.layers.get_output(
         l_out_enc, sym_x, deterministic=True, collect=True)
 
-    return costs, enc_out_clean, out_enc_noisy, collect_out
+    return costs, out_enc_clean, out_enc_noisy, collect_out

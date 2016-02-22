@@ -158,7 +158,7 @@ ll6 = DenseLadderLayer(num_units_in=250, num_units_out=10, nonlinearity=softmax,
 
 layers = [ll0, ll1, ll2, ll3, ll4, ll5, ll6]
 
-costs, enc_out_clean, out_enc_noisy, collect_out = build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t)
+costs, out_enc_clean, out_enc_noisy, collect_out = build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t)
 
 cost = sum(costs)
 
@@ -167,7 +167,7 @@ print('Cost hash: {0}'.format(cost_hash_hex))
 if cost_hash_hex != '0ef905eeec8ae028917bd06222c9e74295058dda85be8a630b7e6108635326ed':
     print('Cost function incorrect')
 
-enc_out_clean_hash_hex = theano_graph_hash_hex(enc_out_clean)
+enc_out_clean_hash_hex = theano_graph_hash_hex(out_enc_clean)
 print('enc_out_clean hash: {0}'.format(enc_out_clean_hash_hex))
 if enc_out_clean_hash_hex != '498783576600b7f64b87cb79405232b3c591bb36ba4148d9b696318de50f8f58':
     print('enc_out_clean function incorrect')
@@ -182,7 +182,7 @@ print('collect_out hash: {0}'.format(collect_out_hash_hex))
 if collect_out_hash_hex != 'db6d6c323b8e4f3b47f24426a791d7eb4903afe2680f8a40bdbf1b17be0dcc30':
     print('collect_out function incorrect')
 
-# sys.exit()
+sys.exit()
 
 # Get list of all trainable parameters in the network.
 all_params = lasagne.layers.get_all_params(layers[0].l_z_hat_bn, trainable=True)
@@ -199,7 +199,7 @@ else:
 
 updates = optimizer(all_grads, all_params, learning_rate=sh_lr)
 
-f_clean = theano.function([sym_x], enc_out_clean)
+f_clean = theano.function([sym_x], out_enc_clean)
 
 f_train = theano.function([sym_x, sym_t],
                           [cost, out_enc_noisy] + costs,
