@@ -193,44 +193,43 @@ for i, layer in reversed(list(enumerate(layers))):
 #     z_hat_bn0, sym_x).eval({sym_x: x_train[:200]}).shape
 
 
+#
+# [enc_out_clean, z0_clean, z1_clean, z2_clean,
+#  z3_clean, z4_clean, z5_clean, z6_clean] = lasagne.layers.get_output(
+#     [l_out_enc] + [l.l_z for l in layers], sym_x, deterministic=True)
+#
+# # Clean pass of encoder  note that these are both labeled
+# # and unlabeled so we need to slice
+# z0_clean = z0_clean[num_labels:]
+# z1_clean = z1_clean[num_labels:]
+# z2_clean = z2_clean[num_labels:]
+# z3_clean = z3_clean[num_labels:]
+# z4_clean = z4_clean[num_labels:]
+# z5_clean = z5_clean[num_labels:]
+# z6_clean = z6_clean[num_labels:]
 
-[enc_out_clean, z0_clean, z1_clean, z2_clean,
- z3_clean, z4_clean, z5_clean, z6_clean] = lasagne.layers.get_output(
-    [l_out_enc] + [l.l_z for l in layers], sym_x, deterministic=True)
-
-# Clean pass of encoder  note that these are both labeled
-# and unlabeled so we need to slice
-z0_clean = z0_clean[num_labels:]
-z1_clean = z1_clean[num_labels:]
-z2_clean = z2_clean[num_labels:]
-z3_clean = z3_clean[num_labels:]
-z4_clean = z4_clean[num_labels:]
-z5_clean = z5_clean[num_labels:]
-z6_clean = z6_clean[num_labels:]
-
-
-# noisy pass encoder + decoder
-# the output from the decoder is only unlabeled because we slice the top h
-[out_enc_noisy, z_hat_bn0_noisy, z_hat_bn1_noisy,
- z_hat_bn2_noisy, z_hat_bn3_noisy, z_hat_bn4_noisy,
- z_hat_bn5_noisy, z_hat_bn6_noisy] = lasagne.layers.get_output(
-    [l_out_enc] + [l.l_z_hat_bn for l in layers],
-     sym_x,  deterministic=False)
-
-
-# if unsupervised we need ot cut ot the samples with no labels.
+# Clean pass of encoder
+enc_out_clean = lasagne.layers.get_output(l_out_enc, sym_x, deterministic=True)
+# Noisy pass encoder
+out_enc_noisy = lasagne.layers.get_output(l_out_enc, sym_x, deterministic=False)
+# select samples with labels
 out_enc_noisy = out_enc_noisy[:num_labels]
 
+# Supervised cost
 costs = [T.mean(T.nnet.categorical_crossentropy(out_enc_noisy, sym_t))]
 
-# i checkt the blocks code - they do sum over the feature dimension
-costs += [lambdas[6]*T.sqr(z6_clean.flatten(2) - z_hat_bn6_noisy.flatten(2)).mean(axis=1).mean()]
-costs += [lambdas[5]*T.sqr(z5_clean.flatten(2) - z_hat_bn5_noisy.flatten(2)).mean(axis=1).mean()]
-costs += [lambdas[4]*T.sqr(z4_clean.flatten(2) - z_hat_bn4_noisy.flatten(2)).mean(axis=1).mean()]
-costs += [lambdas[3]*T.sqr(z3_clean.flatten(2) - z_hat_bn3_noisy.flatten(2)).mean(axis=1).mean()]
-costs += [lambdas[2]*T.sqr(z2_clean.flatten(2) - z_hat_bn2_noisy.flatten(2)).mean(axis=1).mean()]
-costs += [lambdas[1]*T.sqr(z1_clean.flatten(2) - z_hat_bn1_noisy.flatten(2)).mean(axis=1).mean()]
-costs += [lambdas[0]*T.sqr(z0_clean.flatten(2) - z_hat_bn0_noisy.flatten(2)).mean(axis=1).mean()]
+for layer in layers:
+    # Clean pass of encoder
+    z_c = lasagne.layers.get_output(layer.l_z, sym_x, deterministic=True)
+    # Select unsupervised samples
+    layer.z_clean = z_c[num_labels:]
+
+    # Noisy pass of decoder
+    layer.z_h_bn_noisy = lasagne.layers.get_output(layer.l_z_hat_bn, sym_x, deterministic=False)
+
+    # Append cost
+    costs.append(layer.cost_weight * T.sqr(layer.z_clean.flatten(2) - layer.z_h_bn_noisy.flatten(2)).mean(axis=1).mean())
+
 
 
 cost = sum(costs)
