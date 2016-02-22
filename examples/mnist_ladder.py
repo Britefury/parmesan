@@ -182,7 +182,7 @@ print('collect_out hash: {0}'.format(collect_out_hash_hex))
 if collect_out_hash_hex != 'db6d6c323b8e4f3b47f24426a791d7eb4903afe2680f8a40bdbf1b17be0dcc30':
     print('collect_out function incorrect')
 
-sys.exit()
+# sys.exit()
 
 # Get list of all trainable parameters in the network.
 all_params = lasagne.layers.get_all_params(layers[0].l_z_hat_bn, trainable=True)
