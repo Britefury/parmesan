@@ -38,6 +38,7 @@ import theano.tensor as T
 from parmesan.layers import (ListIndexLayer, NormalizeLayer,
                              ScaleAndShiftLayer, DecoderNormalizeLayer,
                              DenoiseLayer,)
+from parmesan.utils import theano_graph_hash_hex
 import os, sys
 import uuid
 import parmesan
@@ -304,15 +305,29 @@ costs += [lambdas[0]*T.sqr(z0_clean.flatten(2) - z_hat_bn0_noisy.flatten(2)).mea
 
 
 cost = sum(costs)
-hasher = hashlib.sha256()
-buf = cStringIO.StringIO()
-theano.printing.debugprint(cost, file=buf)
-hasher.update(buf.getvalue())
-print('Graph hash: {0}'.format(binascii.hexlify(hasher.digest())))
-sys.exit()
 # prediction passes
 collect_out = lasagne.layers.get_output(
     l_out_enc, sym_x, deterministic=True, collect=True)
+
+cost_hash_hex = theano_graph_hash_hex(cost)
+print('Cost hash: {0}'.format(cost_hash_hex))
+if cost_hash_hex != '0ef905eeec8ae028917bd06222c9e74295058dda85be8a630b7e6108635326ed':
+    print('Cost function incorrect')
+
+enc_out_clean_hash_hex = theano_graph_hash_hex(enc_out_clean)
+print('enc_out_clean hash: {0}'.format(enc_out_clean_hash_hex))
+if enc_out_clean_hash_hex != '498783576600b7f64b87cb79405232b3c591bb36ba4148d9b696318de50f8f58':
+    print('enc_out_clean function incorrect')
+
+out_enc_noisy_hash_hex = theano_graph_hash_hex(out_enc_noisy)
+print('out_enc_noisy hash: {0}'.format(out_enc_noisy_hash_hex))
+if out_enc_noisy_hash_hex != 'b3598519cf67f0d992aa078b2180c7917e51b2daca297aee03ad06c63582e239':
+    print('out_enc_noisy function incorrect')
+
+collect_out_hash_hex = theano_graph_hash_hex(collect_out)
+print('collect_out hash: {0}'.format(collect_out_hash_hex))
+if collect_out_hash_hex != 'db6d6c323b8e4f3b47f24426a791d7eb4903afe2680f8a40bdbf1b17be0dcc30':
+    print('collect_out function incorrect')
 
 
 # Get list of all trainable parameters in the network.

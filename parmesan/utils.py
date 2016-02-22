@@ -1,4 +1,6 @@
 import numpy as np
+import hashlib, binascii, cStringIO
+import theano
 
 
 class ConfusionMatrix:
@@ -154,3 +156,10 @@ class ConfusionMatrix:
         res = res[~np.isnan(res)]
         return res
 
+
+def theano_graph_hash_hex(g):
+    hasher = hashlib.sha256()
+    buf = cStringIO.StringIO()
+    theano.printing.debugprint(g, file=buf)
+    hasher.update(buf.getvalue())
+    return binascii.hexlify(hasher.digest())
