@@ -39,7 +39,7 @@ from parmesan.layers import (ListIndexLayer, NormalizeLayer,
                              ScaleAndShiftLayer, DecoderNormalizeLayer,
                              DenoiseLayer,)
 from parmesan.utils import theano_graph_hash_hex
-from parmesan.layers.ladderlayers import decode_denoise, decode_normalize, RasmusInit, DenseLadderLayer, InputLadderLayer
+from parmesan.layers.ladderlayers import RasmusInit, DenseLadderLayer, InputLadderLayer, build_ladder_ae
 import os, sys, time
 import uuid
 import parmesan
@@ -145,9 +145,6 @@ sym_x = T.matrix('sym_x')
 sym_t = T.ivector('sym_t')
 sh_lr = theano.shared(lasagne.utils.floatX(lr))
 
-def get_unlab(l):
-    return SliceLayer(l, indices=slice(num_labels, None), axis=0)
-
 
 
 ll0 = InputLadderLayer(shape=(None, 28*28), cost_weight=lambdas[0])
@@ -161,84 +158,9 @@ ll6 = DenseLadderLayer(num_units_in=250, num_units_out=10, nonlinearity=softmax,
 
 layers = [ll0, ll1, ll2, ll3, ll4, ll5, ll6]
 
-h_prev = None
-for i, layer in enumerate(layers):
-    layer.l_h, layer.l_z, layer.l_z_noise, layer.l_norm_list = layer.create_encoder(h_prev, unlabeled_slice, i)
-    h_prev = layer.l_h
-
-
-l_out_enc = layers[-1].l_h
-
-# print "h6:", lasagne.layers.get_output(h6, sym_x).eval({sym_x: x_train[:200]}).shape
-l_out_dec = get_unlab(l_out_enc)
-# print "y_weights_decoder:", lasagne.layers.get_output(l_out_dec, sym_x).eval({sym_x: x_train[:200]}).shape
-
-
-###############
-#  DECODER    #
-###############
-
-layers[-1].l_z_hat_pre = l_out_dec
-
-for i, layer in reversed(list(enumerate(layers))):
-    z_hat, z_hat_bn, z_hat_pre_prev = \
-        layer.create_decoder_2(layer.l_z_hat_pre, layer.l_z_noise, layer.l_norm_list, num_labels, i)
-    if i > 0:
-        layer.l_z_hat, layer.l_z_hat_bn, layers[i-1].l_z_hat_pre = z_hat, z_hat_bn, z_hat_pre_prev
-    else:
-        layer.l_z_hat, layer.l_z_hat_bn = z_hat, z_hat_bn
-
-
-# print "z_hat_bn0:", lasagne.layers.get_output(
-#     z_hat_bn0, sym_x).eval({sym_x: x_train[:200]}).shape
-
-
-#
-# [enc_out_clean, z0_clean, z1_clean, z2_clean,
-#  z3_clean, z4_clean, z5_clean, z6_clean] = lasagne.layers.get_output(
-#     [l_out_enc] + [l.l_z for l in layers], sym_x, deterministic=True)
-#
-# # Clean pass of encoder  note that these are both labeled
-# # and unlabeled so we need to slice
-# z0_clean = z0_clean[num_labels:]
-# z1_clean = z1_clean[num_labels:]
-# z2_clean = z2_clean[num_labels:]
-# z3_clean = z3_clean[num_labels:]
-# z4_clean = z4_clean[num_labels:]
-# z5_clean = z5_clean[num_labels:]
-# z6_clean = z6_clean[num_labels:]
-
-# Clean pass of encoder
-clean_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z for l in layers],
-                                       sym_x, deterministic=True)
-enc_out_clean = clean_outs[0]
-for layer, z_clean in zip(layers, clean_outs[1:]):
-    # Select unsupervised samples
-    layer.z_clean = z_clean[num_labels:]
-
-# Noisy pass encoder
-noisy_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z_hat_bn for l in layers],
-                                       sym_x, deterministic=False)
-# select samples with labels
-out_enc_noisy = noisy_outs[0][:num_labels]
-
-for layer, z_h_bn_noisy in zip(layers, noisy_outs[1:]):
-    # Select unsupervised samples
-    layer.z_h_bn_noisy = z_h_bn_noisy
-
-# Supervised cost
-costs = [T.mean(T.nnet.categorical_crossentropy(out_enc_noisy, sym_t))]
-
-for layer in layers[::-1]:
-    # Append cost
-    costs.append(layer.cost_weight * T.sqr(layer.z_clean.flatten(2) - layer.z_h_bn_noisy.flatten(2)).mean(axis=1).mean())
-
-
+costs, enc_out_clean, out_enc_noisy, collect_out = build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t)
 
 cost = sum(costs)
-# prediction passes
-collect_out = lasagne.layers.get_output(
-    l_out_enc, sym_x, deterministic=True, collect=True)
 
 cost_hash_hex = theano_graph_hash_hex(cost)
 print('Cost hash: {0}'.format(cost_hash_hex))
@@ -260,6 +182,7 @@ print('collect_out hash: {0}'.format(collect_out_hash_hex))
 if collect_out_hash_hex != 'db6d6c323b8e4f3b47f24426a791d7eb4903afe2680f8a40bdbf1b17be0dcc30':
     print('collect_out function incorrect')
 
+# sys.exit()
 
 # Get list of all trainable parameters in the network.
 all_params = lasagne.layers.get_all_params(layers[0].l_z_hat_bn, trainable=True)

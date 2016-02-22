@@ -202,3 +202,66 @@ class InputLadderLayer (AbstractLadderLayer):
         return z_hat, z_hat_bn, None
 
 
+
+def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
+    h_prev = None
+    for i, layer in enumerate(layers):
+        layer.l_h, layer.l_z, layer.l_z_noise, layer.l_norm_list = layer.create_encoder(h_prev, unlabeled_slice, i)
+        h_prev = layer.l_h
+
+
+    l_out_enc = layers[-1].l_h
+
+    # print "h6:", lasagne.layers.get_output(h6, sym_x).eval({sym_x: x_train[:200]}).shape
+    l_out_dec = get_unlab(l_out_enc, num_labels)
+    # print "y_weights_decoder:", lasagne.layers.get_output(l_out_dec, sym_x).eval({sym_x: x_train[:200]}).shape
+
+
+    ###############
+    #  DECODER    #
+    ###############
+
+    layers[-1].l_z_hat_pre = l_out_dec
+
+    for i, layer in reversed(list(enumerate(layers))):
+        z_hat, z_hat_bn, z_hat_pre_prev = \
+            layer.create_decoder_2(layer.l_z_hat_pre, layer.l_z_noise, layer.l_norm_list, num_labels, i)
+        if i > 0:
+            layer.l_z_hat, layer.l_z_hat_bn, layers[i-1].l_z_hat_pre = z_hat, z_hat_bn, z_hat_pre_prev
+        else:
+            layer.l_z_hat, layer.l_z_hat_bn = z_hat, z_hat_bn
+
+
+    # print "z_hat_bn0:", lasagne.layers.get_output(
+    #     z_hat_bn0, sym_x).eval({sym_x: x_train[:200]}).shape
+
+    # Clean pass of encoder
+    clean_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z for l in layers],
+                                           sym_x, deterministic=True)
+    enc_out_clean = clean_outs[0]
+    for layer, z_clean in zip(layers, clean_outs[1:]):
+        # Select unsupervised samples
+        layer.z_clean = z_clean[num_labels:]
+
+    # Noisy pass encoder
+    noisy_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z_hat_bn for l in layers],
+                                           sym_x, deterministic=False)
+    # select samples with labels
+    out_enc_noisy = noisy_outs[0][:num_labels]
+
+    for layer, z_h_bn_noisy in zip(layers, noisy_outs[1:]):
+        # Select unsupervised samples
+        layer.z_h_bn_noisy = z_h_bn_noisy
+
+    # Supervised cost
+    costs = [T.mean(T.nnet.categorical_crossentropy(out_enc_noisy, sym_t))]
+
+    for layer in layers[::-1]:
+        # Append cost
+        costs.append(layer.cost_weight * T.sqr(layer.z_clean.flatten(2) - layer.z_h_bn_noisy.flatten(2)).mean(axis=1).mean())
+
+    # prediction passes
+    collect_out = lasagne.layers.get_output(
+        l_out_enc, sym_x, deterministic=True, collect=True)
+
+    return costs, enc_out_clean, out_enc_noisy, collect_out
