@@ -209,24 +209,27 @@ for i, layer in reversed(list(enumerate(layers))):
 # z6_clean = z6_clean[num_labels:]
 
 # Clean pass of encoder
-enc_out_clean = lasagne.layers.get_output(l_out_enc, sym_x, deterministic=True)
+clean_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z for l in layers],
+                                       sym_x, deterministic=True)
+enc_out_clean = clean_outs[0]
+for layer, z_clean in zip(layers, clean_outs[1:]):
+    # Select unsupervised samples
+    layer.z_clean = z_clean[num_labels:]
+
 # Noisy pass encoder
-out_enc_noisy = lasagne.layers.get_output(l_out_enc, sym_x, deterministic=False)
+noisy_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z_hat_bn for l in layers],
+                                       sym_x, deterministic=False)
 # select samples with labels
-out_enc_noisy = out_enc_noisy[:num_labels]
+out_enc_noisy = noisy_outs[0][:num_labels]
+
+for layer, z_h_bn_noisy in zip(layers, noisy_outs[1:]):
+    # Select unsupervised samples
+    layer.z_h_bn_noisy = z_h_bn_noisy
 
 # Supervised cost
 costs = [T.mean(T.nnet.categorical_crossentropy(out_enc_noisy, sym_t))]
 
-for layer in layers:
-    # Clean pass of encoder
-    z_c = lasagne.layers.get_output(layer.l_z, sym_x, deterministic=True)
-    # Select unsupervised samples
-    layer.z_clean = z_c[num_labels:]
-
-    # Noisy pass of decoder
-    layer.z_h_bn_noisy = lasagne.layers.get_output(layer.l_z_hat_bn, sym_x, deterministic=False)
-
+for layer in layers[::-1]:
     # Append cost
     costs.append(layer.cost_weight * T.sqr(layer.z_clean.flatten(2) - layer.z_h_bn_noisy.flatten(2)).mean(axis=1).mean())
 
