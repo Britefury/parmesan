@@ -63,6 +63,7 @@ args = parser.parse_args()
 
 num_classes = 10
 batch_size = 100  # fails if batch_size != batch_size
+collect_batch_size = 2000
 num_labels = 100
 
 np.random.seed(1234) # reproducibility
@@ -158,7 +159,8 @@ ll6 = DenseLadderLayer(num_units_in=250, num_units_out=10, nonlinearity=softmax,
 
 layers = [ll0, ll1, ll2, ll3, ll4, ll5, ll6]
 
-costs, out_enc_clean, out_enc_noisy, collect_out = build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t)
+costs, out_enc_clean, out_enc_noisy, collect_out = build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t,
+                                                                   norm_alpha=0.1)
 
 cost = sum(costs)
 
@@ -245,12 +247,21 @@ def train_epoch_semisupervised(x):
         preds = np.argmax(net_out, axis=-1)
         confusion_train.batchadd(preds, targets_train_lab)
         losses += [batch_loss]
+    collect()
     return confusion_train, losses, layer_costs
+
+
+def collect():
+    N = x_train.shape[0]
+    n_collect_batches = N / collect_batch_size
+    indices = np.arange(N)
+    for i in range(n_collect_batches):
+        batch_indices = indices[i*collect_batch_size:i*collect_batch_size+collect_batch_size]
+        _ = f_collect(x_train[batch_indices])
 
 
 def test_epoch(x, y):
     confusion_valid = parmesan.utils.ConfusionMatrix(num_classes)
-    _ = f_collect(x_train)
     net_out = f_clean(x)
     preds = np.argmax(net_out, axis=-1)
     confusion_valid.batchadd(preds, y)

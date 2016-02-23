@@ -1,7 +1,7 @@
 import numpy as np
 import lasagne
 import theano.tensor as T
-from lasagne.layers import MergeLayer, SliceLayer, GaussianNoiseLayer, NonlinearityLayer, DenseLayer
+from lasagne.layers import MergeLayer, SliceLayer, GaussianNoiseLayer, NonlinearityLayer, DenseLayer, Conv2DLayer, MaxPool2DLayer, Upscale2DLayer, ReshapeLayer
 from lasagne import init
 from lasagne import nonlinearities
 from parmesan.layers.normalize import NormalizeLayer, ScaleAndShiftLayer
@@ -38,26 +38,39 @@ class DenoiseLayer(MergeLayer):
 
         u_shp, z_shp = self.input_shapes
 
-
-        if not u_shp[-1] == z_shp[-1]:
+        if not u_shp[1] == z_shp[1]:
             raise ValueError("last dimension of u and z  must be equal"
                              " u was %s, z was %s" % (str(u_shp), str(z_shp)))
-        self.num_inputs = z_shp[-1]
+        self.num_inputs = z_shp[1]
+        self.shape = [1 for i in z_shp]
+        self.shape[1] = self.num_inputs
+        self.shape = tuple(self.shape)
+        self.bc_axes = (0,) + tuple(range(2, len(z_shp)))
         self.nonlinearity = nonlinearity
         constant = init.Constant
-        self.a1 = self.add_param(constant(0.), (self.num_inputs,), name="a1")
-        self.a2 = self.add_param(constant(1.), (self.num_inputs,), name="a2")
-        self.a3 = self.add_param(constant(0.), (self.num_inputs,), name="a3")
-        self.a4 = self.add_param(constant(0.), (self.num_inputs,), name="a4")
+        self.a1 = self.add_param(constant(0.), self.shape, name="a1")
+        self.a2 = self.add_param(constant(1.), self.shape, name="a2")
+        self.a3 = self.add_param(constant(0.), self.shape, name="a3")
+        self.a4 = self.add_param(constant(0.), self.shape, name="a4")
 
-        self.c1 = self.add_param(constant(0.), (self.num_inputs,), name="c1")
-        self.c2 = self.add_param(constant(1.), (self.num_inputs,), name="c2")
-        self.c3 = self.add_param(constant(0.), (self.num_inputs,), name="c3")
+        self.c1 = self.add_param(constant(0.), self.shape, name="c1")
+        self.c2 = self.add_param(constant(1.), self.shape, name="c2")
+        self.c3 = self.add_param(constant(0.), self.shape, name="c3")
 
-        self.c4 = self.add_param(constant(0.), (self.num_inputs,), name="c4")
+        self.c4 = self.add_param(constant(0.), self.shape, name="c4")
 
-        self.b1 = self.add_param(constant(0.), (self.num_inputs,),
+        self.b1 = self.add_param(constant(0.), self.shape,
                                  name="b1", regularizable=False)
+
+        self.a1 = T.addbroadcast(self.a1, *self.bc_axes)
+        self.a2 = T.addbroadcast(self.a2, *self.bc_axes)
+        self.a3 = T.addbroadcast(self.a3, *self.bc_axes)
+        self.a4 = T.addbroadcast(self.a4, *self.bc_axes)
+        self.b1 = T.addbroadcast(self.b1, *self.bc_axes)
+        self.c1 = T.addbroadcast(self.c1, *self.bc_axes)
+        self.c2 = T.addbroadcast(self.c2, *self.bc_axes)
+        self.c3 = T.addbroadcast(self.c3, *self.bc_axes)
+        self.c4 = T.addbroadcast(self.c4, *self.bc_axes)
 
     def get_output_shape_for(self, input_shapes):
         output_shape = list(input_shapes[0])  # make a mutable copy
@@ -78,8 +91,8 @@ def get_unlab(l, num_labels):
     return SliceLayer(l, indices=slice(num_labels, None), axis=0)
 
 
-def decode_denoise(z_hat_in, z_noise, layer_index, num_labels):
-    normalize = NormalizeLayer(z_hat_in, name='dec_normalize%i' % layer_index)
+def decode_denoise(z_hat_in, z_noise, layer_index, num_labels, norm_alpha='single_pass'):
+    normalize = NormalizeLayer(z_hat_in, name='dec_normalize%i' % layer_index, alpha=norm_alpha)
     u = ScaleAndShiftLayer(normalize, name='dec_scale%i' % layer_index)
     return DenoiseLayer(u_net=u, z_net=get_unlab(z_noise, num_labels), name='dec_denoise%i' % layer_index)
 
@@ -116,11 +129,13 @@ class RasmusInit(lasagne.init.Initializer):
 
 
 class AbstractLadderLayer (object):
-    def create_encoder(self, h_prev, unlabeled_slice, layer_num):
+    CONTRIBUTES_TO_COST = False
+
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num, norm_alpha):
         raise NotImplementedError('abstract for class {0}'.format(type(self)))
 
 
-    def create_decoder(self, z_hat_pre, num_labels, layer_num):
+    def create_decoder(self, z_hat_pre, num_labels, layer_num, norm_alpha):
         raise NotImplementedError('abstract for class {0}'.format(type(self)))
 
 
@@ -140,12 +155,12 @@ class XformLadderLayer (AbstractLadderLayer):
     def _decode_xform(self, z_hat_in, i):
         raise NotImplementedError('abstract for class {0}'.format(type(self)))
 
-    def create_encoder(self, h_prev, unlabeled_slice, layer_num):
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num, norm_alpha):
         i = layer_num
         z_pre = self._encode_xform(h_prev, i)
         norm_list = NormalizeLayer(
             z_pre, return_stats=True, name='enc_normalize%i' % i,
-            stat_indices=unlabeled_slice)
+            stat_indices=unlabeled_slice, alpha=norm_alpha)
         z = ListIndexLayer(norm_list, index=0, name='enc_index%i' % i)
         z_noise = GaussianNoiseLayer(z, sigma=self.noise, name='enc_noise%i' % i)
         h = NonlinearityLayer(
@@ -157,10 +172,9 @@ class XformLadderLayer (AbstractLadderLayer):
         self.l_norm_list = norm_list
         return h
 
-
-    def create_decoder(self, z_hat_pre, num_labels, layer_num):
+    def create_decoder(self, z_hat_pre, num_labels, layer_num, norm_alpha):
         i = layer_num
-        z_hat = decode_denoise(z_hat_pre, self.l_z_noise, i, num_labels)
+        z_hat = decode_denoise(z_hat_pre, self.l_z_noise, i, num_labels, norm_alpha=norm_alpha)
         z_hat_bn = decode_normalize(z_hat, self.l_norm_list, i)
         z_hat_pre_below = self._decode_xform(z_hat, i - 1)
         self.l_z_hat = z_hat
@@ -169,6 +183,8 @@ class XformLadderLayer (AbstractLadderLayer):
 
 
 class DenseLadderLayer (XformLadderLayer):
+    CONTRIBUTES_TO_COST = True
+
     def __init__(self, num_units_in, num_units_out, nonlinearity=lasagne.nonlinearities.rectify, init=None,
                  cost_weight=1.0, noise=0.3):
         super(DenseLadderLayer, self).__init__(nonlinearity=nonlinearity, init=init, cost_weight=cost_weight,
@@ -187,14 +203,69 @@ class DenseLadderLayer (XformLadderLayer):
                              W=self.init, nonlinearity=nonlinearities.identity)
         return z_hat_W
 
+
+class ConvPoolLadderLayer (XformLadderLayer):
+    CONTRIBUTES_TO_COST = True
+
+    def __init__(self, num_filters_in, num_filters_out, filter_size, pool_size, nonlinearity=lasagne.nonlinearities.rectify, init=None,
+                 cost_weight=1.0, noise=0.3, norm_alpha='single_pass'):
+        super(ConvPoolLadderLayer, self).__init__(nonlinearity=nonlinearity, init=init, cost_weight=cost_weight,
+                                                  noise=noise)
+        self.num_filters_in = num_filters_in
+        self.num_filters_out = num_filters_out
+        self.filter_size = filter_size
+        self.pool_size = pool_size
+
+    def _encode_xform(self, incoming, i):
+        z_pre = Conv2DLayer(incoming=incoming, num_filters=self.num_filters_out, filter_size=self.filter_size,
+                            nonlinearity=nonlinearities.identity, b=None, name='enc_conv2d%i' % i, W=self.init)
+        if self.pool_size is not None and self.pool_size != 1 and self.pool_size != (1,1):
+            z_pre = MaxPool2DLayer(incoming=z_pre, pool_size=self.pool_size, name='enc_maxpool2d%i' % i)
+        return z_pre
+
+    def _decode_xform(self, z_hat_in, i):
+        if self.pool_size is not None and self.pool_size != 1 and self.pool_size != (1,1):
+            z_hat_in = Upscale2DLayer(incoming=z_hat_in, scale_factor=self.pool_size, name='dec_upscale2d%i' % i)
+        z_hat_W = Conv2DLayer(incoming=z_hat_in, num_filters=self.num_filters_in, filter_size=self.filter_size,
+                              pad='full', nonlinearity=nonlinearities.identity, b=None, name='enc_conv2d%i' % i,
+                              W=self.init)
+        return z_hat_W
+
+
+class ReshapeLadderLayer (AbstractLadderLayer):
+    CONTRIBUTES_TO_COST = False
+
+    def __init__(self, shape_in, shape_out):
+        """
+        Reshape
+
+        Parameters
+        ----------
+        shape_in: input shape, excluding dimension 0
+        shape_out: output shape, excluding dimension 0
+        """
+        super(ReshapeLadderLayer, self).__init__()
+        self.shape_in = shape_in
+        self.shape_out = shape_out
+
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num, norm_alpha):
+        return ReshapeLayer(h_prev, (-1,) + self.shape_out)
+
+
+    def create_decoder(self, z_hat_pre, num_labels, layer_num, norm_alpha):
+        return ReshapeLayer(z_hat_pre, (-1,) + self.shape_in)
+
+
 class InputLadderLayer (AbstractLadderLayer):
+    CONTRIBUTES_TO_COST = True
+
     def __init__(self, shape, noise=0.3, cost_weight=1.0):
         super(InputLadderLayer, self).__init__()
         self.shape = shape
         self.noise = noise
         self.cost_weight = cost_weight
 
-    def create_encoder(self, h_prev, unlabeled_slice, layer_num):
+    def create_encoder(self, h_prev, unlabeled_slice, layer_num, norm_alpha):
         z = lasagne.layers.InputLayer(shape=self.shape)
         z_noise = GaussianNoiseLayer(z, sigma=self.noise, name='enc_noise%i' % layer_num)
         h = z_noise
@@ -203,21 +274,21 @@ class InputLadderLayer (AbstractLadderLayer):
         self.l_z_noise = z_noise
         return h
 
-
-    def create_decoder(self, z_hat_pre, num_labels, layer_num):
+    def create_decoder(self, z_hat_pre, num_labels, layer_num, norm_alpha):
         i = layer_num
-        z_hat = decode_denoise(z_hat_pre, self.l_z_noise, i, num_labels=num_labels)
+        z_hat = decode_denoise(z_hat_pre, self.l_z_noise, i, num_labels=num_labels, norm_alpha=norm_alpha)
         z_hat_bn = z_hat   # for consistency
         self.l_z_hat = z_hat
         self.l_z_hat_bn = z_hat_bn
         return None
 
 
+def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t, norm_alpha='single_pass'):
+    contributing_layers = [layer for layer in layers if layer.CONTRIBUTES_TO_COST]
 
-def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
     h_prev = None
     for i, layer in enumerate(layers):
-        h_prev = layer.create_encoder(h_prev, unlabeled_slice, i)
+        h_prev = layer.create_encoder(h_prev, unlabeled_slice, i, norm_alpha)
 
 
     l_out_enc = layers[-1].l_h
@@ -234,34 +305,34 @@ def build_ladder_ae(layers, num_labels, unlabeled_slice, sym_x, sym_t):
     z_hat_pre = l_out_dec
 
     for i, layer in reversed(list(enumerate(layers))):
-        z_hat_pre = layer.create_decoder(z_hat_pre, num_labels, i)
+        z_hat_pre = layer.create_decoder(z_hat_pre, num_labels, i, norm_alpha)
 
 
     # print "z_hat_bn0:", lasagne.layers.get_output(
     #     z_hat_bn0, sym_x).eval({sym_x: x_train[:200]}).shape
 
     # Clean pass of encoder
-    clean_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z for l in layers],
+    clean_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z for l in contributing_layers],
                                            sym_x, deterministic=True)
     out_enc_clean = clean_outs[0]
-    for layer, z_clean in zip(layers, clean_outs[1:]):
+    for layer, z_clean in zip(contributing_layers, clean_outs[1:]):
         # Select unsupervised samples
         layer.z_clean = z_clean[num_labels:]
 
     # Noisy pass encoder
-    noisy_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z_hat_bn for l in layers],
+    noisy_outs = lasagne.layers.get_output([l_out_enc] + [l.l_z_hat_bn for l in contributing_layers],
                                            sym_x, deterministic=False)
     # select samples with labels
     out_enc_noisy = noisy_outs[0][:num_labels]
 
-    for layer, z_h_bn_noisy in zip(layers, noisy_outs[1:]):
+    for layer, z_h_bn_noisy in zip(contributing_layers, noisy_outs[1:]):
         # Select unsupervised samples
         layer.z_h_bn_noisy = z_h_bn_noisy
 
     # Supervised cost
     costs = [T.mean(T.nnet.categorical_crossentropy(out_enc_noisy, sym_t))]
 
-    for layer in layers[::-1]:
+    for layer in contributing_layers[::-1]:
         # Append cost
         costs.append(layer.cost_weight * T.sqr(layer.z_clean.flatten(2) - layer.z_h_bn_noisy.flatten(2)).mean(axis=1).mean())
 
