@@ -129,12 +129,12 @@ class SampleLayer(lasagne.layers.MergeLayer):
         mu, log_var = input
         batch_size = mu.shape[0]
         latent_shape = mu.shape[1:]
+        n_samples = self.eq_samples * self.iw_samples
         eps = self._srng.normal(
-            [batch_size, self.eq_samples, self.iw_samples,] + list(latent_shape),
+            [batch_size * n_samples] + list(latent_shape),
              dtype=theano.config.floatX)
 
-        latent_dims = range(1, mu.ndim)
-        z = mu.dimshuffle(0,'x','x',*latent_dims) + \
-            self.nonlinearity( log_var.dimshuffle(0,'x','x',*latent_dims)) * eps
+        z = mu.repeat(n_samples, axis=0) + \
+            self.nonlinearity(log_var.repeat(n_samples, axis=0)) * eps
 
-        return z.reshape((-1,) + latent_shape)
+        return z
