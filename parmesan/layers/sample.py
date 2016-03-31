@@ -115,23 +115,26 @@ class SampleLayer(lasagne.layers.MergeLayer):
         self._srng.seed(seed)
 
     def get_output_shape_for(self, input_shapes):
-        batch_size, num_latent = input_shapes[0]
+        batch_size = input_shapes[0][0]
+        latent_shape = input_shapes[0][1:]
         if isinstance(batch_size, int) and \
            isinstance(self.iw_samples, int) and \
            isinstance(self.eq_samples, int):
-            out_dim = (batch_size*self.eq_samples*self.iw_samples, num_latent)
+            out_dim = (batch_size*self.eq_samples*self.iw_samples,) + latent_shape
         else:
-            out_dim = (None, num_latent)
+            out_dim = (None,) + latent_shape
         return out_dim
 
     def get_output_for(self, input, **kwargs):
         mu, log_var = input
-        batch_size, num_latent = mu.shape
+        batch_size = mu.shape[0]
+        latent_shape = mu.shape[1:]
         eps = self._srng.normal(
-            [batch_size, self.eq_samples, self.iw_samples, num_latent],
+            [batch_size, self.eq_samples, self.iw_samples,] + list(latent_shape),
              dtype=theano.config.floatX)
 
-        z = mu.dimshuffle(0,'x','x',1) + \
-            self.nonlinearity( log_var.dimshuffle(0,'x','x',1)) * eps
+        latent_dims = range(1, 1+len(latent_shape))
+        z = mu.dimshuffle(0,'x','x',*latent_dims) + \
+            self.nonlinearity( log_var.dimshuffle(0,'x','x',*latent_dims)) * eps
 
-        return z.reshape((-1,num_latent))
+        return z.reshape((-1,) + latent_shape)
